@@ -6,7 +6,7 @@ import java.util.Scanner;
 public class Receiever {
     // inputs :receiver_port FileReceived.txt
     // implementing a wait-send protocol which doesnt need a buffer
-    private File file;
+    private BufferedWriter file;
     private DatagramSocket clientSocket;
     private int port;
     private InetAddress IP;
@@ -17,17 +17,10 @@ public class Receiever {
         IP = InetAddress.getByName("localhost");
         this.PTP_send = new PTP(port, IP.toString());
         this.port = port_number;
-        openFile(path);
+        file = new BufferedWriter(new FileWriter(path, true));
         createSocket();
         connect();
         listen();
-
-    }
-
-    private void openFile(String path) {
-
-        File file = new File(path);
-        this.file = file;
 
     }
 
@@ -67,7 +60,19 @@ public class Receiever {
 
     }
 
-    public void listen() {
+    public void listen() throws Exception {
+        while (true) {
+            byte[] receiveData = new byte[1024];
+            // receive from server
+            DatagramPacket receivePacket = new DatagramPacket(receiveData, receiveData.length);
+            clientSocket.receive(receivePacket);
+            HashMap<String, String> packet = PTP.receive_PTP_packet(receivePacket);
+            if (PTP.get_flag(packet).equals("FIN"))
+                return;
+            file.append(packet.get("Data"));
+            PTP_send.send_ACK(true, packet);
+
+        }
 
     }
 

@@ -2,9 +2,10 @@ import java.util.*;
 import java.io.*;
 import java.net.*;
 import java.util.Scanner;
+import java.util.Timer;
 
 public class Sender {
-    private File file;
+    private FileInputStream file;
     private DatagramSocket clientSocket;
     private int port;
     private InetAddress IP;
@@ -21,6 +22,8 @@ public class Sender {
     public Sender(String receiver_IP, int receiver_port, String path, int MWS, int MSS, int timeout, int pdrop,
             int seed) throws Exception {
 
+        file = new FileInputStream(path);
+
         this.IP = InetAddress.getByName("localhost");
         this.port = 3003;
         this.receiver_IP = InetAddress.getByName(receiver_IP);
@@ -33,14 +36,39 @@ public class Sender {
         createSocket();
         this.PTP_send = new PTP(port, IP.toString());
         connect();
+        send();
 
     }
 
-    private void openFile(String path) {
+    public void wait_for_ACK(byte[] send) throws Exception {
+        Timer timer = new Timer(); // timer is ticking
+        TimerTask retransmit = new TimerTask() {
+            public void run() {
+                DatagramPacket send_packet = new DatagramPacket(send, send.length, receiver_IP, receiver_port);
+                try {
+                    clientSocket.send(send_packet);
+                } catch (IOException e) {
+                    System.out.println(e);
+                }
+            }
+        };
+        timer.schedule(retransmit, timeout);
+        byte[] receieveData = new byte[1024];
+        DatagramPacket packet = new DatagramPacket(receieveData, receieveData.length);
+        clientSocket.receive(packet);
+        PTP_send.ACK(Integer.parseInt(PTP.receive_PTP_packet(packet).get("ACK_number")));
+    }
 
-        File file = new File(path);
-        this.file = file;
-
+    public void send() throws Exception {
+        byte[] data = new byte[MSS + 1];
+        int bytesRead = file.read(data, 0, MSS);
+        while (bytesRead != -1) {
+            byte[] send = PTP_send.send_data(data);
+            DatagramPacket send_packet = new DatagramPacket(send, send.length, receiver_IP, receiver_port);
+            clientSocket.send(send_packet);
+            wait_for_ACK(send);
+            bytesRead = file.read(data, 0, MSS);
+        }
     }
 
     private void createSocket() throws Exception {
