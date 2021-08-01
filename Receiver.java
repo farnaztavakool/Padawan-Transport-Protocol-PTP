@@ -3,7 +3,7 @@ import java.io.*;
 import java.net.*;
 import java.util.Scanner;
 
-public class Receiever {
+public class Receiver {
     // inputs :receiver_port FileReceived.txt
     // implementing a wait-send protocol which doesnt need a buffer
     private BufferedWriter file;
@@ -15,7 +15,7 @@ public class Receiever {
 
     private final long start_timestamp;
 
-    public Receiever(int port_number, String path) throws Exception {
+    public Receiver(int port_number, String path) throws Exception {
         System.out.println("listening");
         IP = InetAddress.getByName("localhost");
         this.PTP_send = new PTP(port, IP.toString());
@@ -166,6 +166,6 @@ public class Receiever {
 
         String[] input = myObj.nextLine().split(" ");
         System.out.println(input);
-        Receiever receiver = new Receiever(Integer.parseInt(input[0]), input[1]);
+        Receiver receiver = new Receiver(Integer.parseInt(input[0]), input[1]);
     }
 }
