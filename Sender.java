@@ -2,8 +2,9 @@ import java.util.*;
 import java.io.*;
 import java.net.*;
 import java.util.Scanner;
+import java.util.concurrent.locks.*;
 
-public class Sender {
+public class Sender extends Thread {
     private FileInputStream file;
     private DatagramSocket socket;
     private BufferedWriter log_file;
@@ -16,15 +17,24 @@ public class Sender {
     private final int MSS;
     private final int timeout;
     private final float pdrop;
-
+    private Timer current_timer;
     private final long start_timestamp;
     private final int seed;
+    private int startWindow;
+    private int nextSeqNumber;
     private Random random;
+    private HashMap<Integer, String> buffer;
+    static ReentrantLock syncLock = new ReentrantLock();
+    public int dupACK;
+    private static long fileLength;
 
     public Sender(String receiver_IP, int receiver_port, String path, int MWS, int MSS, int timeout, float pdrop,
             int seed) throws Exception {
+        nextSeqNumber = startWindow = dupACK = 0;
+        buffer = new HashMap<Integer, String>();
         random = new Random(seed);
         file = new FileInputStream(path);
+        getLengthOfFile(path);
         create_log();
         this.IP = InetAddress.getByName("localhost");
         this.port = 3005;
@@ -35,12 +45,81 @@ public class Sender {
         this.timeout = timeout;
         this.pdrop = pdrop;
         this.seed = seed;
+        current_timer = new Timer();
         createSocket();
         this.PTP_send = new PTP(port, IP.toString());
         start_timestamp = System.currentTimeMillis();
         connect();
-        send();
+        send_file_thread().start();
+        receive_thread().start();
 
+    }
+
+    public void getLengthOfFile(String path) {
+        fileLength = new File(path).length();
+    }
+
+    public Thread receive_thread() throws Exception
+
+    {
+        return new Thread() {
+            public void run() {
+                HashMap<String, String> packet_map;
+                // receiving the ACK packages
+                while (true) {
+                    try {
+                        packet_map = receive();
+                        int ACK_number = Integer.parseInt(packet_map.get("ACK_number"));
+                        syncLock.lock();
+                        System.out.println("Received Ack for this " + ACK_number + " " + packet_map.get("seq_number"));
+                        // base packet is Acked and can move forward
+                        if (ACK_number > startWindow) {
+                            // move the base to the current acked location
+                            buffer.remove(startWindow);
+                            startWindow = ACK_number;
+                            // cancel the current timer running
+                            // current_timer.cancel();
+                            // reschedule the timer again
+                            current_timer.schedule(createTimerTask(), timeout);
+                        } else if (ACK_number == startWindow) {
+                            send(getRetransmitPacket());
+                            current_timer.cancel();
+                            // reschedule the timer again
+                            current_timer.schedule(createTimerTask(), timeout);
+
+                        }
+                        syncLock.unlock();
+                    } catch (Exception e) {
+                        System.out.println(e);
+                    }
+                    // try {
+                    // Thread.sleep(10);
+                    // } catch (InterruptedException e) {
+                    // System.out.println(e);
+                    // }
+                }
+            }
+
+        };
+
+    }
+
+    public void send(byte[] send) throws Exception {
+        DatagramPacket send_packet = new DatagramPacket(send, send.length, receiver_IP, receiver_port);
+        socket.send(send_packet);
+
+    }
+
+    public HashMap<String, String> receive() throws Exception {
+
+        byte[] receiveData = new byte[1024];
+        // receive from server
+        DatagramPacket receivePacket = new DatagramPacket(receiveData, receiveData.length);
+        socket.receive(receivePacket);
+        HashMap<String, String> packet = PTP.receive_PTP_packet(receivePacket);
+        String type = PTP.get_flag(packet);
+        log("rcv", type, Integer.parseInt(packet.get("seq_number")), 0, Integer.parseInt(packet.get("ACK_number")));
+        return packet;
     }
 
     public void create_log() throws IOException {
@@ -58,15 +137,21 @@ public class Sender {
         log_file.newLine();
     }
 
-    public void wait_for_ACK(byte[] send) throws Exception {
-        Timer timer = new Timer(); // timer is ticking
-        TimerTask retransmit = new TimerTask() {
+    public byte[] getRetransmitPacket() {
+        String data = buffer.get(startWindow);
+        return PTP_send.send_data(data.getBytes());
+
+    }
+
+    public TimerTask createTimerTask() {
+        return new TimerTask() {
             public void run() {
                 System.out.println("retransmitting");
+                byte[] send = getRetransmitPacket();
                 DatagramPacket send_packet = new DatagramPacket(send, send.length, receiver_IP, receiver_port);
                 try {
                     try {
-                        log("snd", "D", PTP_send.seq_number, MSS, PTP_send.last_ACK);
+                        log("snd", "D", startWindow, MSS, PTP_send.last_ACK);
                     } catch (Exception e) {
                         System.out.println(e);
                     }
@@ -76,40 +161,104 @@ public class Sender {
                 }
             }
         };
-        System.out.println("this is timeout" + timeout);
-        timer.schedule(retransmit, timeout);
-        byte[] receieveData = new byte[1024];
-        DatagramPacket packet = new DatagramPacket(receieveData, receieveData.length);
-        socket.receive(packet);
-
-        if (PTP_send.ACK(Integer.parseInt(PTP.receive_PTP_packet(packet).get("ACK_number")))) {
-            timer.cancel();
-            return;
-        }
-        // System.out.println("ACK doesnt match");
-
     }
 
-    public void send() throws Exception {
-        byte[] data = new byte[MSS + 1];
-        int bytesRead = file.read(data, 0, MSS);
-        while (bytesRead != -1) {
-            byte[] send = PTP_send.send_data(data);
-            DatagramPacket send_packet = new DatagramPacket(send, send.length, receiver_IP, receiver_port);
-            log("snd", "D", PTP_send.seq_number, MSS, PTP_send.last_ACK);
-            // if x > pdrop transmit the file
-            if (!PL())
-                socket.send(send_packet);
-            else {
-                System.out.println("dropped");
+    // I think we only need to manually start the timer for the first read
+    // either the timer will timeout and start again or a new file is acked and the
+    // timer will start for the new base
+    public Thread send_file_thread() throws Exception {
+        return new Thread() {
+            public void run() {
+                while (true) {
+                    // current seqNumber
+                    if (nextSeqNumber == fileLength) {
+                        try {
+                            disconnect();
+                            return;
+                        } catch (Exception e) {
+                            System.out.println(e);
+                        }
+                    }
+                    if (nextSeqNumber < MWS + startWindow) {
+
+                        int i = nextSeqNumber;
+                        while (i < MWS + startWindow) {
+                            byte[] data = new byte[MSS + 1];
+                            try {
+                                if (file.read(data, 0, MSS) != 0) {
+                                    // reading the data into buffer if needs to be retransmitted
+                                    syncLock.lock();
+                                    buffer.put(i, new String(data));
+                                    if (nextSeqNumber == 0) {
+                                        TimerTask task = createTimerTask();
+                                        current_timer.schedule(task, timeout);
+                                    }
+                                    if (!PL()) {
+
+                                        send(PTP_send.send_data(data));
+                                    }
+                                    i += Math.min(fileLength - i, MSS);
+                                    nextSeqNumber = i;
+                                    log("snd", "D", PTP_send.seq_number, MSS, PTP_send.last_ACK);
+                                    syncLock.unlock();
+                                } else {
+                                    disconnect();
+                                    return;
+                                }
+                            } catch (Exception e) {
+                                System.out.println(e);
+                            }
+
+                        }
+                    }
+                    // try {
+                    // sleep(100);
+                    // } catch (InterruptedException e) {
+                    // System.out.println(e);
+                    // }
+
+                }
             }
-            wait_for_ACK(send);
-            bytesRead = file.read(data, 0, MSS);
-        }
-        disconnect();
+        };
+        // while (true) {
+        // // current seqNumber
+        // if (nextSeqNumber < MWS + startWindow) {
+
+        // int i = nextSeqNumber;
+        // while (i < MWS + startWindow) {
+        // byte[] data = new byte[MSS + 1];
+        // if (file.read(data, 0, MSS) != 0) {
+        // // reading the data into buffer if needs to be retransmitted
+        // buffer.put(i, new String(data));
+        // if (nextSeqNumber == 0) {
+        // TimerTask task = createTimerTask();
+        // current_timer.schedule(task, timeout);
+        // }
+        // if (!PL()) {
+
+        // send(PTP_send.send_data(data));
+        // }
+        // i += Math.min(fileLength - i, MSS);
+        // nextSeqNumber = i;
+        // log("snd", "D", PTP_send.seq_number, MSS, PTP_send.last_ACK);
+        // } else {
+        // disconnect();
+        // return;
+        // }
+
+        // }
+        // }
+        // try {
+        // sleep(100);
+        // } catch (InterruptedException e) {
+        // System.out.println(e);
+        // }
+
+        // }
+
     }
 
-    private void createSocket() throws Exception {
+    void createSocket() throws Exception {
 
         SocketAddress sockaddr = new InetSocketAddress(IP, port);
         socket = new DatagramSocket(null);
@@ -120,22 +269,18 @@ public class Sender {
         while (true) {
             System.out.println("Sending SYN");
             byte[] sendData = PTP_send.send_SYN();
+            send(sendData);
 
-            DatagramPacket packet = new DatagramPacket(sendData, sendData.length, receiver_IP, receiver_port);
-            socket.send(packet);
             log("snd", "S", PTP_send.seq_number, 0, PTP_send.last_ACK);
+            System.out.println("logges");
+            HashMap<String, String> packet_recieved = receive();
 
-            byte[] receieveData = new byte[1024];
-            packet = new DatagramPacket(receieveData, receieveData.length);
-            socket.receive(packet);
-            HashMap<String, String> packet_recieved = PTP.receive_PTP_packet(packet);
-            if (PTP.get_flag(packet_recieved).equals("SYN/ACK")) {
-                log("rcv", "SA", Integer.parseInt(packet_recieved.get("seq_number")), 0,
-                        Integer.parseInt(packet_recieved.get("ACK_number")));
+            String result = PTP.get_flag(packet_recieved);
+            if (PTP.get_flag(packet_recieved).equals("SA")) {
+
                 System.out.println("receieved SYN/ACK sending ACK");
-                byte[] send = PTP_send.send_ACK(false, false, packet_recieved);
-                DatagramPacket send_packet = new DatagramPacket(send, send.length, receiver_IP, receiver_port);
-                socket.send(send_packet);
+                sendData = PTP_send.send_ACK(false, false, packet_recieved);
+                send(sendData);
                 log("snd", "A", PTP_send.seq_number, 0, PTP_send.last_ACK);
                 System.out.println("successfully connected");
                 return;
@@ -147,28 +292,17 @@ public class Sender {
 
     public void disconnect() throws Exception {
         // sending FIN
-        byte[] send = PTP_send.send_FIN();
-        DatagramPacket send_packet = new DatagramPacket(send, send.length, receiver_IP, receiver_port);
-        socket.send(send_packet);
+        byte[] end = PTP_send.send_FIN();
+        send(end);
         log("snd", "F", PTP_send.seq_number, 0, PTP_send.last_ACK);
-        send = new byte[1024];
 
-        send_packet = new DatagramPacket(send, send.length);
-
-        // waiting for FIN/ACK
-        socket.receive(send_packet);
-        HashMap<String, String> end_ACK = PTP.receive_PTP_packet(send_packet);
+        HashMap<String, String> end_ACK = receive();
 
         // if the packet is FIN/ACK
-        if (PTP.get_flag(end_ACK).equals("FIN/ACK")) {
-            send = null;
-            send = PTP_send.send_ACK(false, false, end_ACK);
-            log("rcv", "FA", Integer.parseInt(end_ACK.get("seq_number")), 0,
-                    Integer.parseInt(end_ACK.get("ACK_number")));
+        if (PTP.get_flag(end_ACK).equals("FA")) {
 
-            // send the ACk and close the connection
-            send_packet = new DatagramPacket(send, send.length, receiver_IP, receiver_port);
-            socket.send(send_packet);
+            end = PTP_send.send_ACK(false, false, end_ACK);
+            send(end);
             socket.close();
             log("snd", "A", PTP_send.seq_number, 0, PTP_send.last_ACK);
             log_file.close();

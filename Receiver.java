@@ -1,6 +1,6 @@
-import java.util.*;
 import java.io.*;
 import java.net.*;
+import java.util.*;
 import java.util.Scanner;
 
 public class Receiver {
@@ -12,20 +12,27 @@ public class Receiver {
     private int port;
     private InetAddress IP;
     private final PTP PTP_send;
-
+    private int expected_seq;
     private final long start_timestamp;
+    // 2 dimentional arraylist to buffer data based on seq_number
+    private ArrayList<HashMap<Integer, String>> buffer = new ArrayList<HashMap<Integer, String>>();
+    // private max_buffer_size
 
     public Receiver(int port_number, String path) throws Exception {
         System.out.println("listening");
         IP = InetAddress.getByName("localhost");
-        this.PTP_send = new PTP(port, IP.toString());
+        // both are starting from seq number 0
+        expected_seq = 0;
         this.port = port_number;
+        this.PTP_send = new PTP(port, IP.toString());
         this.file = create_file(path);
         this.log_file = create_file("Receiver_log.txt");
         createSocket();
         start_timestamp = System.currentTimeMillis();
 
         connect();
+        // expected_seq increases by from SYN
+        expected_seq += 1;
         listen();
 
     }
@@ -56,29 +63,17 @@ public class Receiver {
     public void connect() throws Exception {
         System.out.println("Listening for connection");
         while (true) {
-            byte[] receiveData = new byte[1024];
-            // receive from server
-            DatagramPacket receivePacket = new DatagramPacket(receiveData, receiveData.length);
-            clientSocket.receive(receivePacket);
-            HashMap<String, String> packet = PTP.receive_PTP_packet(receivePacket);
 
-            log("rcv", "S", Integer.parseInt(packet.get("seq_number")), 0, Integer.parseInt(packet.get("ACK_number")));
+            HashMap<String, String> packet = receive();
 
-            if (PTP.get_flag(packet).equals("SYN")) {
-                byte[] send = PTP_send.send_ACK(true, false, packet);
-                DatagramPacket send_packet = new DatagramPacket(send, send.length,
-                        InetAddress.getByName(packet.get("IP").split("/")[0]), Integer.parseInt(packet.get("port")));
-
+            if (PTP.get_flag(packet).equals("S")) {
+                byte[] send_byte = PTP_send.send_ACK(true, false, packet);
+                send(send_byte, packet);
                 log("snd", "SA", PTP_send.seq_number, 0, PTP_send.last_ACK);
-                clientSocket.send(send_packet);
 
             }
-            byte[] final_ACK = new byte[1024];
-            // receive from server
-            DatagramPacket finalPacket = new DatagramPacket(receiveData, receiveData.length);
-            clientSocket.receive(finalPacket);
-            packet = PTP.receive_PTP_packet(finalPacket);
-            if (PTP.get_flag(packet).equals("ACK")) {
+            packet = receive();
+            if (PTP.get_flag(packet).equals("A")) {
                 System.out.println("connected");
                 if (PTP_send.ACK(Integer.parseInt(packet.get("ACK_number")))) {
                     log("rcv", "A", Integer.parseInt(packet.get("seq_number")), 0,
@@ -88,6 +83,26 @@ public class Receiver {
             }
         }
 
+    }
+
+    public void send(byte[] send_byte, HashMap<String, String> packet) throws Exception {
+        DatagramPacket send_packet = new DatagramPacket(send_byte, send_byte.length,
+                InetAddress.getByName(packet.get("IP").split("/")[0]), Integer.parseInt(packet.get("port")));
+
+        clientSocket.send(send_packet);
+        System.out.println("sent");
+
+    }
+
+    public HashMap<String, String> receive() throws Exception {
+        byte[] receiveData = new byte[1024];
+        // receive from server
+        DatagramPacket receivePacket = new DatagramPacket(receiveData, receiveData.length);
+        clientSocket.receive(receivePacket);
+        HashMap<String, String> packet = PTP.receive_PTP_packet(receivePacket);
+        String type = PTP_send.get_flag(packet);
+        log("rcv", type, Integer.parseInt(packet.get("seq_number")), 0, Integer.parseInt(packet.get("ACK_number")));
+        return packet;
     }
 
     public void disconnect(HashMap<String, String> packet) throws Exception {
@@ -120,36 +135,49 @@ public class Receiver {
 
     public void listen() throws Exception {
         while (true) {
-            byte[] packet = new byte[1024];
-            // receive from server
-            DatagramPacket datagram_packet = new DatagramPacket(packet, packet.length);
-            clientSocket.receive(datagram_packet);
-            HashMap<String, String> packet_map = PTP.receive_PTP_packet(datagram_packet);
 
-            log("rcv", "D", Integer.parseInt(packet_map.get("seq_number")), 0,
-                    Integer.parseInt(packet_map.get("ACK_number")));
-            packet = null;
-            datagram_packet = null;
-            // if it is FIN start the disconnection process
-            if (PTP.get_flag(packet_map).equals("FIN")) {
+            HashMap<String, String> packet_map = receive();
+            log("snd", "A", PTP_send.seq_number, 0, PTP_send.last_ACK);
+            if (PTP.get_flag(packet_map).equals("F")) {
                 disconnect(packet_map);
                 return;
             }
-            // read the data into the .txt file
-            // TODO: data should be buffered and the buffer should be read to the .txt file
-            // instead
-            // buffer can be an array which is indexed via the seq number
-            // flush the buffer
-            file.write(packet_map.get("Data"));
+            // if we are receiving the packet expecting, write it into the file
+            // sort the buffer and write what is missing into buffer
+            // update ACK
+            Integer seq_number = Integer.parseInt(packet_map.get("seq_number"));
+            String data = packet_map.get("Data");
+            if (seq_number == expected_seq) {
 
-            packet = PTP_send.send_ACK(false, false, packet_map);
-            datagram_packet = new DatagramPacket(packet, packet.length,
-                    InetAddress.getByName(packet_map.get("IP").split("/")[0]),
-                    Integer.parseInt(packet_map.get("port")));
+                file.write(data);
+                PTP_send.last_ACK += data.length();
+                if (!buffer.isEmpty()) {
 
+                    Collections.sort(buffer, comparator);
+                    while (true) {
+
+                        Integer seq = buffer.get(0).keySet().iterator().next();
+                        if (PTP_send.last_ACK == seq) {
+                            String data_to_write = buffer.get(0).get(seq);
+                            file.write(data_to_write);
+                            buffer.remove(0);
+                            continue;
+                        }
+                        return;
+
+                    }
+                }
+
+            } else {
+                // if the packet is out of order, save it to buffer but dont update the ACK
+                HashMap<Integer, String> input = new HashMap<Integer, String>();
+                input.put(seq_number, data);
+                buffer.add(input);
+
+            }
+            byte[] send_byte = PTP_send.send_ACK(true, false, packet_map);
+            send(send_byte, packet_map);
             log("snd", "A", PTP_send.seq_number, 0, PTP_send.last_ACK);
-            clientSocket.send(datagram_packet);
-
         }
 
     }
@@ -160,6 +188,17 @@ public class Receiver {
         clientSocket = new DatagramSocket(null);
         clientSocket.bind(sockaddr);
     }
+
+    final Comparator<HashMap<Integer, String>> comparator = new Comparator<HashMap<Integer, String>>() {
+
+        @Override
+        public int compare(HashMap<Integer, String> pList1, HashMap<Integer, String> pList2) {
+
+            Integer key1 = pList1.keySet().iterator().next();
+            Integer key2 = pList1.keySet().iterator().next();
+            return key1.compareTo(key2);
+        }
+    };
 
     public static void main(String[] args) throws Exception {
         Scanner myObj = new Scanner(System.in); // Create a Scanner object

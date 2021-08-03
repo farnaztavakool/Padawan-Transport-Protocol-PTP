@@ -66,15 +66,16 @@ public class PTP {
 
         String res = IP + " " + port.toString() + " " + flag + " " + this.seq_number.toString() + " " + ACK.toString()
                 + " " + "Data " + data;
-
-        seq_number += data.trim().length();
+        System.out.println(seq_number + " " + data.trim().length());
+        if (flag == "D")
+            seq_number += data.trim().length();
         return res.getBytes();
     }
 
     public static HashMap<String, String> receive_PTP_packet(DatagramPacket receivedPacket) {
         String data = new String(receivedPacket.getData());
+        System.out.println("this is the received packet " + data);
         String[] res = data.split("Data");
-        boolean check = res[1].equals("");
         String[] header = res[0].split(" ");
         HashMap<String, String> map = new HashMap<String, String>();
         map.put("IP", header[0]);
@@ -90,15 +91,17 @@ public class PTP {
     public static String get_flag(HashMap<String, String> packet) {
         switch (packet.get("flag")) {
             case "1000":
-                return "FIN";
+                return "F";
             case "0100":
-                return "SYN";
+                return "S";
             case "0010":
-                return "ACK";
+                return "A";
             case "0110":
-                return "SYN/ACK";
+                return "SA";
             case "1010":
-                return "FIN/ACK";
+                return "FA";
+            case "0001":
+                return "D";
             default:
                 return "unknown";
         }
