@@ -18,6 +18,10 @@ public class PTP {
         this.IP = IP;
     }
 
+    public void drop(byte[] data) {
+        seq_number += (new String(data)).length();
+    }
+
     public void set_Seq_number(int seq_number) {
         this.seq_number = seq_number;
     }
@@ -25,11 +29,18 @@ public class PTP {
     // public void set_ACK_number(int ACK_number) {
     // this.ACK_number = ACK_number;
     // }
+    public byte[] send_last_ack() {
+        return send_PTP_packet("", "0010", last_ACK);
+    }
+
+    public byte[] send_ACK(int updated_ACK) {
+        last_ACK = updated_ACK;
+        return send_PTP_packet("", "0010", updated_ACK);
+    }
 
     public byte[] send_ACK(boolean syn, boolean fin, HashMap<String, String> packet) {
         int data_length = packet.get("Data").equals(" ") ? 0 : packet.get("Data").length();
         int seq = Integer.parseInt(packet.get("seq_number"));
-        boolean check = (seq == 1);
         Integer ACK = seq + data_length;
         last_ACK = ACK;
         if (syn == true) {
@@ -45,6 +56,13 @@ public class PTP {
     public byte[] send_data(byte[] data) {
 
         return send_PTP_packet(new String(data), "0001", last_ACK);
+    }
+
+    public byte[] resend_data(String data, Integer seq_number) {
+        String res = IP + " " + port.toString() + " " + "1111" + " " + seq_number.toString() + " " + last_ACK.toString()
+                + " " + "Data " + data;
+        return res.getBytes();
+
     }
 
     // we dont need to set ACK for SYN
@@ -66,8 +84,8 @@ public class PTP {
 
         String res = IP + " " + port.toString() + " " + flag + " " + this.seq_number.toString() + " " + ACK.toString()
                 + " " + "Data " + data;
-        System.out.println(seq_number + " " + data.trim().length());
-        if (flag == "D")
+
+        if (flag.equals("0001"))
             seq_number += data.trim().length();
         return res.getBytes();
     }
@@ -102,6 +120,8 @@ public class PTP {
                 return "FA";
             case "0001":
                 return "D";
+            case "1111":
+                return "retransmit";
             default:
                 return "unknown";
         }

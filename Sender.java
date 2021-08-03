@@ -71,21 +71,32 @@ public class Sender extends Thread {
                         packet_map = receive();
                         int ACK_number = Integer.parseInt(packet_map.get("ACK_number"));
                         syncLock.lock();
-                        System.out.println("Received Ack for this " + ACK_number + " " + packet_map.get("seq_number"));
+                        System.out.println("in the process of Acing " + ACK_number + " " + startWindow);
                         // base packet is Acked and can move forward
-                        if (ACK_number > startWindow) {
+                        if (ACK_number > startWindow + 1) {
                             // move the base to the current acked location
                             buffer.remove(startWindow);
-                            startWindow = ACK_number;
-                            // cancel the current timer running
-                            // current_timer.cancel();
+                            startWindow = ACK_number - 1;
+                            dupACK = 0;
+
                             // reschedule the timer again
+                            System.out.println(
+                                    "Received Ack for this now cacnelling timer " + ACK_number + " " + startWindow);
+
                             current_timer.schedule(createTimerTask(), timeout);
-                        } else if (ACK_number == startWindow) {
-                            send(getRetransmitPacket());
-                            current_timer.cancel();
-                            // reschedule the timer again
-                            current_timer.schedule(createTimerTask(), timeout);
+                        } else if (ACK_number == startWindow + 1) {
+                            dupACK += 1;
+                            // fast retransmit and resett dupACK
+                            // otherwise we are ignoring the duplicate ACK
+                            if (dupACK == 3) {
+                                send(getRetransmitPacket());
+
+                                // reschedule the timer again
+                                System.out.println("out of order now cacnelling timer and retransmitting" + ACK_number
+                                        + " " + startWindow);
+                                current_timer.schedule(createTimerTask(), timeout);
+                                dupACK = 0;
+                            }
 
                         }
                         syncLock.unlock();
@@ -139,14 +150,15 @@ public class Sender extends Thread {
 
     public byte[] getRetransmitPacket() {
         String data = buffer.get(startWindow);
-        return PTP_send.send_data(data.getBytes());
+        System.out.println("this is the buffer" + buffer);
+        return PTP_send.resend_data(data, startWindow + 1);
 
     }
 
     public TimerTask createTimerTask() {
         return new TimerTask() {
             public void run() {
-                System.out.println("retransmitting");
+                System.out.println("retransmitting this packet " + startWindow);
                 byte[] send = getRetransmitPacket();
                 DatagramPacket send_packet = new DatagramPacket(send, send.length, receiver_IP, receiver_port);
                 try {
@@ -171,6 +183,7 @@ public class Sender extends Thread {
             public void run() {
                 while (true) {
                     // current seqNumber
+                    // System.out.println(nextSeqNumber + " " + fileLength + " " + startWindow);
                     if (nextSeqNumber == fileLength) {
                         try {
                             disconnect();
@@ -193,9 +206,13 @@ public class Sender extends Thread {
                                         TimerTask task = createTimerTask();
                                         current_timer.schedule(task, timeout);
                                     }
+                                    System.out.println("this is the packet sent " + i);
                                     if (!PL()) {
 
                                         send(PTP_send.send_data(data));
+                                    } else {
+                                        PTP_send.drop(data);
+                                        System.out.println("dropped " + i);
                                     }
                                     i += Math.min(fileLength - i, MSS);
                                     nextSeqNumber = i;

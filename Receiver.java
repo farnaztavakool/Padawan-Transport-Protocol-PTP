@@ -149,34 +149,42 @@ public class Receiver {
             String data = packet_map.get("Data");
             if (seq_number == expected_seq) {
 
+                System.out.println("ackiing");
+                expected_seq += data.length();
                 file.write(data);
-                PTP_send.last_ACK += data.length();
-                if (!buffer.isEmpty()) {
-
-                    Collections.sort(buffer, comparator);
-                    while (true) {
-
-                        Integer seq = buffer.get(0).keySet().iterator().next();
-                        if (PTP_send.last_ACK == seq) {
-                            String data_to_write = buffer.get(0).get(seq);
-                            file.write(data_to_write);
-                            buffer.remove(0);
-                            continue;
-                        }
-                        return;
-
+                Collections.sort(buffer, comparator);
+                while (!buffer.isEmpty()) {
+                    System.out.println(buffer);
+                    Integer seq = buffer.get(0).keySet().iterator().next();
+                    System.out.println("are these equal? " + seq + " " + PTP_send.last_ACK);
+                    if (expected_seq == seq) {
+                        String data_to_write = buffer.get(0).get(seq);
+                        file.write(data_to_write);
+                        buffer.remove(0);
+                        expected_seq += data_to_write.length();
+                        continue;
                     }
+                    return;
+
                 }
 
+                send(PTP_send.send_ACK(expected_seq), packet_map);
+                // send(PTP_send.send_ACK(false, false, packet_map), packet_map);
+
+            } else if (seq_number < expected_seq) {
+                // there is duplicate packet send
+                System.out.println("this is duplicated");
+
+                send(PTP_send.send_last_ack(), packet_map);
             } else {
                 // if the packet is out of order, save it to buffer but dont update the ACK
                 HashMap<Integer, String> input = new HashMap<Integer, String>();
                 input.put(seq_number, data);
                 buffer.add(input);
+                send(PTP_send.send_last_ack(), packet_map);
 
             }
-            byte[] send_byte = PTP_send.send_ACK(true, false, packet_map);
-            send(send_byte, packet_map);
+
             log("snd", "A", PTP_send.seq_number, 0, PTP_send.last_ACK);
         }
 
