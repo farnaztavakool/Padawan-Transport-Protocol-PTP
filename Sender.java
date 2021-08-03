@@ -79,29 +79,32 @@ public class Sender extends Thread {
                 HashMap<String, String> packet_map;
                 // receiving the ACK packages
                 while (true) {
-                    if (end_flag.get() == 1)
-                        return;
+                    // if (end_flag.get() == 1)
+                    // return;
 
                     try {
                         packet_map = receive();
                         int ACK_number = Integer.parseInt(packet_map.get("ACK_number"));
                         syncLock.lock();
-                        System.out.println("in the process of Acing " + ACK_number + " " + startWindow.get());
-                        // base packet is Acked and can move forward
-                        if (ACK_number >= fileLength) {
-                            current_timer.cancel();
-                            disconnect();
-                            System.out.println("disconnected");
-                            try {
-                                Thread.currentThread().join();
-                            } catch (Exception e) {
-                                System.out.println(e);
-                            }
+                        // Last Acked expected
+                        System.out.println(packet_map);
+                        if (PTP.get_flag(packet_map).equals("FA")) {
+                            dupACK -= 1;
+                            disconnect(packet_map);
+                            return;
                         }
+                        if (ACK_number >= fileLength) {
+
+                            dupACK_overall += 1;
+                            current_timer.cancel();
+                            send_FIN();
+                            System.out.println("send FIN");
+                        }
+
                         if (ACK_number > startWindow.get() + 1) {
                             // move the base to the current acked location
                             buffer.remove(startWindow.get());
-                            startWindow.set(ACK_number - 2);
+                            startWindow.set(ACK_number - 1);
                             dupACK = 0;
 
                             // reschedule the timer again
@@ -130,11 +133,7 @@ public class Sender extends Thread {
                     } catch (Exception e) {
                         System.out.println(e);
                     }
-                    // try {
-                    // Thread.sleep(10);
-                    // } catch (InterruptedException e) {
-                    // System.out.println(e);
-                    // }
+
                 }
             }
 
@@ -182,7 +181,6 @@ public class Sender extends Thread {
 
     public byte[] getRetransmitPacket() {
         String data = buffer.get(startWindow.get());
-        System.out.println("this is the buffer" + buffer);
         return PTP_send.resend_data(data, startWindow.get() + 1);
 
     }
@@ -190,7 +188,6 @@ public class Sender extends Thread {
     public TimerTask createTimerTask() {
         return new TimerTask() {
             public void run() {
-                System.out.println("retransmitting this packet " + startWindow.get());
                 retransmitted_segment += 1;
                 byte[] send = getRetransmitPacket();
                 DatagramPacket send_packet = new DatagramPacket(send, send.length, receiver_IP, receiver_port);
@@ -233,8 +230,6 @@ public class Sender extends Thread {
                                         TimerTask task = createTimerTask();
                                         current_timer.schedule(task, timeout);
                                     }
-                                    System.out.println("this is the packet sent " + i);
-                                    // System.out.println("this is the packet sent " + startWindow.get());
                                     if (!PL()) {
                                         num_segments += 1;
                                         send(PTP_send.send_data(data));
@@ -267,41 +262,6 @@ public class Sender extends Thread {
                 }
             }
         };
-        // while (true) {
-        // // current seqNumber
-        // if (nextSeqNumber < MWS + startWindow) {
-
-        // int i = nextSeqNumber;
-        // while (i < MWS + startWindow) {
-        // byte[] data = new byte[MSS + 1];
-        // if (file.read(data, 0, MSS) != 0) {
-        // // reading the data into buffer if needs to be retransmitted
-        // buffer.put(i, new String(data));
-        // if (nextSeqNumber == 0) {
-        // TimerTask task = createTimerTask();
-        // current_timer.schedule(task, timeout);
-        // }
-        // if (!PL()) {
-
-        // send(PTP_send.send_data(data));
-        // }
-        // i += Math.min(fileLength - i, MSS);
-        // nextSeqNumber = i;
-        // log("snd", "D", PTP_send.seq_number, MSS, PTP_send.last_ACK);
-        // } else {
-        // disconnect();
-        // return;
-        // }
-
-        // }
-        // }
-        // try {
-        // sleep(100);
-        // } catch (InterruptedException e) {
-        // System.out.println(e);
-        // }
-
-        // }
 
     }
 
@@ -337,30 +297,25 @@ public class Sender extends Thread {
         }
     }
 
-    public void disconnect() throws Exception {
-        // sending FIN
+    public void send_FIN() throws Exception {
         byte[] end = PTP_send.send_FIN();
         send(end);
         log("snd", "F", PTP_send.seq_number, 0, PTP_send.last_ACK);
+    }
 
-        HashMap<String, String> end_ACK = receive();
-        System.out.println(PTP.get_flag(end_ACK));
-        // if the packet is FIN/ACK
-        if (PTP.get_flag(end_ACK).equals("FA")) {
+    public void disconnect(HashMap<String, String> end_ACK) throws Exception {
 
-            end = PTP_send.send_ACK(false, false, end_ACK);
-            send(end);
-            socket.close();
-            log("snd", "A", PTP_send.seq_number, 0, PTP_send.last_ACK);
-            log("Amount of (original) Data Transferred (in bytes) " + fileLength);
-            log("Number of Data Segments Sent (excluding retransmissions) " + num_segments);
-            log("Number of (all) Packets Dropped (by the PL module) " + dropped_packet);
-            log("Number of Retransmitted Segments " + retransmitted_segment);
-            log("Number of Duplicate Acknowledgements received " + dupACK_overall);
-            log_file.close();
-            end_flag.set(1);
-
-        }
+        byte[] end = PTP_send.send_ACK(false, false, end_ACK);
+        send(end);
+        socket.close();
+        log("snd", "A", PTP_send.seq_number, 0, PTP_send.last_ACK);
+        log("Amount of (original) Data Transferred (in bytes) " + fileLength);
+        log("Number of Data Segments Sent (excluding retransmissions) " + num_segments);
+        log("Number of (all) Packets Dropped (by the PL module) " + dropped_packet);
+        log("Number of Retransmitted Segments " + retransmitted_segment);
+        log("Number of Duplicate Acknowledgements received " + dupACK_overall);
+        log_file.close();
+        // end_flag.set(1);
 
     }
 
@@ -381,6 +336,8 @@ public class Sender extends Thread {
         Sender sender = new Sender(input[0], Integer.parseInt(input[1]), input[2], Integer.parseInt(input[3]),
                 Integer.parseInt(input[4]), Integer.parseInt(input[5]), Float.parseFloat(input[6]),
                 Integer.parseInt(input[7]));
+        return;
+        // sender.stop();
     }
 
 }

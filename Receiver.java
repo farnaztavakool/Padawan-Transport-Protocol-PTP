@@ -114,10 +114,9 @@ public class Receiver {
 
     public void disconnect(HashMap<String, String> packet) throws Exception {
         // send FIN/ACK
+        System.out.println("disconneting");
         byte[] send = PTP_send.send_ACK(false, true, packet);
-        DatagramPacket send_packet = new DatagramPacket(send, send.length,
-                InetAddress.getByName(packet.get("IP").split("/")[0]), Integer.parseInt(packet.get("port")));
-        clientSocket.send(send_packet);
+        send(send, packet);
         log("snd", "FA", PTP_send.seq_number, 0, PTP_send.last_ACK);
 
         // receieve ACK
@@ -125,15 +124,16 @@ public class Receiver {
         HashMap<String, String> end_ACK = receive();
 
         // if it is Acked correctly close it
-        if (PTP_send.ACK(Integer.parseInt(end_ACK.get("ACK_number")))) {
-            file.close();
-            log("Amount of (original) Data Received (in bytes): " + get_file_length(path));
-            log("Number of (original) Data Segments Received: " + segments);
-            log("Number of duplicate segments received: " + duplicate_segments);
-            log_file.close();
-            clientSocket.close();
+        // if (PTP_send.ACK(Integer.parseInt(end_ACK.get("ACK_number")))) {
 
-        }
+        file.close();
+        log("Amount of (original) Data Received (in bytes): " + get_file_length(path));
+        log("Number of (original) Data Segments Received: " + segments);
+        log("Number of duplicate segments received: " + duplicate_segments);
+        log_file.close();
+        clientSocket.close();
+
+        // }
 
     }
 

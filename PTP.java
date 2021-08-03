@@ -90,6 +90,8 @@ public class PTP {
 
         if (flag.equals("0001"))
             seq_number += data.length();
+        if (flag.equals("1010"))
+            System.out.println("end " + res);
         return res.getBytes();
     }
 
