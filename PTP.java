@@ -1,4 +1,5 @@
 import java.net.DatagramPacket;
+import java.nio.charset.StandardCharsets;
 import java.util.*;
 
 public class PTP {
@@ -26,41 +27,43 @@ public class PTP {
         this.seq_number = seq_number;
     }
 
-    // public void set_ACK_number(int ACK_number) {
-    // this.ACK_number = ACK_number;
-    // }
+    // when data is out of order
     public byte[] send_last_ack() {
         return send_PTP_packet("", "0010", last_ACK);
     }
 
+    // when there are buffere
     public byte[] send_ACK(int updated_ACK) {
         last_ACK = updated_ACK;
         return send_PTP_packet("", "0010", updated_ACK);
     }
 
+    // this is only used for ACKing SYN, SYN/AK, FIN, FIN/ACK
     public byte[] send_ACK(boolean syn, boolean fin, HashMap<String, String> packet) {
-        int data_length = packet.get("Data").equals(" ") ? 0 : packet.get("Data").length();
         int seq = Integer.parseInt(packet.get("seq_number"));
-        Integer ACK = seq + data_length;
+        Integer ACK = seq;
         last_ACK = ACK;
         if (syn == true) {
+            last_ACK++;
             seq_number += 1;
-            return send_PTP_packet("", "0110", ACK);
+            return send_PTP_packet("", "0110", ACK++);
         } else if (fin) {
+            last_ACK++;
             seq_number += 1;
-            return send_PTP_packet("", "1010", ACK);
+            return send_PTP_packet("", "1010", ACK++);
         }
         return send_PTP_packet("", "0010", ACK);
     }
 
     public byte[] send_data(byte[] data) {
-
+        int len = new String(data).length();
+        System.out.println(new String(data).length());
         return send_PTP_packet(new String(data), "0001", last_ACK);
     }
 
     public byte[] resend_data(String data, Integer seq_number) {
         String res = IP + " " + port.toString() + " " + "1111" + " " + seq_number.toString() + " " + last_ACK.toString()
-                + " " + "Data " + data;
+                + " " + "Data " + data + "/";
         return res.getBytes();
 
     }
@@ -83,25 +86,32 @@ public class PTP {
     public byte[] send_PTP_packet(String data, String flag, Integer ACK) {
 
         String res = IP + " " + port.toString() + " " + flag + " " + this.seq_number.toString() + " " + ACK.toString()
-                + " " + "Data " + data;
+                + " " + "Data " + data + "/";
 
         if (flag.equals("0001"))
-            seq_number += data.trim().length();
+            seq_number += data.length();
         return res.getBytes();
     }
 
     public static HashMap<String, String> receive_PTP_packet(DatagramPacket receivedPacket) {
-        String data = new String(receivedPacket.getData());
+        String data = new String(receivedPacket.getData(), StandardCharsets.UTF_8);
         System.out.println("this is the received packet " + data);
-        String[] res = data.split("Data");
+        String[] res = data.split("Data ");
         String[] header = res[0].split(" ");
+        String data_field = "";
+        String data_pack = res[1].split("/")[0];
+
+        // System.out.println("this is the flag" + header[2]);
+        // if (header[2].equals("0001"))
+        // data_field = data_pack;
+
         HashMap<String, String> map = new HashMap<String, String>();
         map.put("IP", header[0]);
         map.put("port", header[1]);
         map.put("flag", header[2]);
         map.put("seq_number", header[3]);
         map.put("ACK_number", header[4]);
-        map.put("Data", res[1].trim());
+        map.put("Data", data_pack);
         return map;
 
     }
