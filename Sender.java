@@ -64,8 +64,6 @@ public class Sender extends Thread {
         send_file_thread().start();
         receive_thread().start();
 
-        System.out.println("out of the threads");
-
     }
 
     public void getLengthOfFile(String path) {
@@ -216,6 +214,7 @@ public class Sender extends Thread {
                     // current seqNumbsyncLock.lock();er
 
                     while (nextSeqNumber < fileLength) {
+                        System.out.println(nextSeqNumber);
 
                         int i = nextSeqNumber;
                         while (i < Math.min(MWS + startWindow.get(), fileLength)) {
@@ -237,7 +236,7 @@ public class Sender extends Thread {
                                     } else {
                                         dropped_packet += 1;
                                         PTP_send.drop(data);
-                                        System.out.println("dropped " + i);
+                                        // System.out.println("dropped " + i);
                                     }
                                     i += Math.min(fileLength - i, MSS);
                                     nextSeqNumber = i;

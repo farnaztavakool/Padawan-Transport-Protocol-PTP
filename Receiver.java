@@ -92,7 +92,7 @@ public class Receiver {
                 InetAddress.getByName(packet.get("IP").split("/")[0]), Integer.parseInt(packet.get("port")));
 
         clientSocket.send(send_packet);
-        System.out.println("sent");
+        // System.out.println("sent");
 
     }
 
@@ -147,6 +147,7 @@ public class Receiver {
 
             HashMap<String, String> packet_map = receive();
             if (PTP.get_flag(packet_map).equals("F")) {
+                System.out.println("disconnecting");
                 disconnect(packet_map);
                 return;
             }
@@ -157,15 +158,15 @@ public class Receiver {
             String data = packet_map.get("Data");
             if (seq_number == expected_seq) {
 
-                System.out.println("ackiing");
+                // System.out.println("ackiing");
                 expected_seq += data.length();
                 file.write(data);
                 Collections.sort(buffer, comparator);
                 segments += 1;
                 while (!buffer.isEmpty()) {
-                    System.out.println(buffer);
+                    // System.out.println(buffer);
                     Integer seq = buffer.get(0).keySet().iterator().next();
-                    System.out.println("are these equal? " + seq + " " + expected_seq);
+                    // System.out.println("are these equal? " + seq + " " + expected_seq);
                     if (expected_seq == seq) {
                         String data_to_write = buffer.get(0).get(seq);
                         file.write(data_to_write);
@@ -185,7 +186,7 @@ public class Receiver {
             } else if (seq_number < expected_seq) {
                 // there is duplicate packet send
                 duplicate_segments += 1;
-                System.out.println("this is duplicated");
+                // System.out.println("this is duplicated");
 
                 send(PTP_send.send_last_ack(), packet_map);
             } else {
