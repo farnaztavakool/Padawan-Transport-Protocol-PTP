@@ -1,13 +1,13 @@
 import java.io.*;
 import java.net.*;
 import java.util.*;
-import java.util.Scanner;
 
 public class Receiver {
     // inputs :receiver_port FileReceived.txt
     // implementing a wait-send protocol which doesnt need a buffer
     private BufferedWriter file;
     private BufferedWriter log_file;
+    private BufferedWriter log_seq;
     private DatagramSocket clientSocket;
     private int port;
     private InetAddress IP;
@@ -17,12 +17,12 @@ public class Receiver {
     public int segments;
     public int duplicate_segments;
     public String path;
+
     // 2 dimentional arraylist to buffer data based on seq_number
     private ArrayList<HashMap<Integer, String>> buffer = new ArrayList<HashMap<Integer, String>>();
     // private max_buffer_size
 
     public Receiver(int port_number, String path) throws Exception {
-        System.out.println("listening");
         this.path = path;
         IP = InetAddress.getByName("localhost");
         // both are starting from seq number 0
@@ -31,6 +31,7 @@ public class Receiver {
         this.PTP_send = new PTP(port, IP.toString());
         this.file = create_file(path);
         this.log_file = create_file("Receiver_log.txt");
+        this.log_seq = create_file("log_seq.txt");
         createSocket();
         start_timestamp = System.currentTimeMillis();
 
@@ -46,6 +47,11 @@ public class Receiver {
         long time = System.currentTimeMillis() - start_timestamp;
         log_file.write(srd + " " + time + " " + type + " " + seq + " " + size + " " + ACK);
         log_file.newLine();
+    }
+
+    public void seq_log(Integer seq) throws Exception {
+        log_seq.write(seq.toString() + ", ");
+
     }
 
     public BufferedWriter create_file(String path) throws IOException {
@@ -65,7 +71,6 @@ public class Receiver {
      * @return
      */
     public void connect() throws Exception {
-        System.out.println("Listening for connection");
         while (true) {
 
             HashMap<String, String> packet = receive();
@@ -78,7 +83,6 @@ public class Receiver {
             }
             packet = receive();
             if (PTP.get_flag(packet).equals("A")) {
-                System.out.println("connected");
                 if (PTP_send.ACK(Integer.parseInt(packet.get("ACK_number")))) {
                     return;
                 }
@@ -92,7 +96,6 @@ public class Receiver {
                 InetAddress.getByName(packet.get("IP").split("/")[0]), Integer.parseInt(packet.get("port")));
 
         clientSocket.send(send_packet);
-        // System.out.println("sent");
 
     }
 
@@ -114,7 +117,6 @@ public class Receiver {
 
     public void disconnect(HashMap<String, String> packet) throws Exception {
         // send FIN/ACK
-        System.out.println("disconneting");
         byte[] send = PTP_send.send_ACK(false, true, packet);
         send(send, packet);
         log("snd", "FA", PTP_send.seq_number, 0, PTP_send.last_ACK);
@@ -123,17 +125,13 @@ public class Receiver {
 
         HashMap<String, String> end_ACK = receive();
 
-        // if it is Acked correctly close it
-        // if (PTP_send.ACK(Integer.parseInt(end_ACK.get("ACK_number")))) {
-
         file.close();
         log("Amount of (original) Data Received (in bytes): " + get_file_length(path));
         log("Number of (original) Data Segments Received: " + segments);
         log("Number of duplicate segments received: " + duplicate_segments);
         log_file.close();
+        log_seq.close();
         clientSocket.close();
-
-        // }
 
     }
 
@@ -147,7 +145,7 @@ public class Receiver {
 
             HashMap<String, String> packet_map = receive();
             if (PTP.get_flag(packet_map).equals("F")) {
-                System.out.println("disconnecting");
+
                 disconnect(packet_map);
                 return;
             }
@@ -155,6 +153,7 @@ public class Receiver {
             // sort the buffer and write what is missing into buffer
             // update ACK
             Integer seq_number = Integer.parseInt(packet_map.get("seq_number"));
+            seq_log(seq_number);
             String data = packet_map.get("Data");
             if (seq_number == expected_seq) {
 
@@ -164,9 +163,7 @@ public class Receiver {
                 Collections.sort(buffer, comparator);
                 segments += 1;
                 while (!buffer.isEmpty()) {
-                    // System.out.println(buffer);
                     Integer seq = buffer.get(0).keySet().iterator().next();
-                    // System.out.println("are these equal? " + seq + " " + expected_seq);
                     if (expected_seq == seq) {
                         String data_to_write = buffer.get(0).get(seq);
                         file.write(data_to_write);
@@ -174,20 +171,16 @@ public class Receiver {
                         expected_seq += data_to_write.length();
                         continue;
                     } else {
-                        // expected_seq++;
                         break;
                     }
 
                 }
 
                 send(PTP_send.send_ACK(expected_seq), packet_map);
-                // send(PTP_send.send_ACK(ffalse, false, packet_map), packet_map);
 
             } else if (seq_number < expected_seq) {
                 // there is duplicate packet send
                 duplicate_segments += 1;
-                // System.out.println("this is duplicated");
-
                 send(PTP_send.send_last_ack(), packet_map);
             } else {
                 // if the packet is out of order, save it to buffer but dont update the ACK
@@ -211,6 +204,7 @@ public class Receiver {
         clientSocket.bind(sockaddr);
     }
 
+    // comapring packet in the buffer based on their sequence number
     final Comparator<HashMap<Integer, String>> comparator = new Comparator<HashMap<Integer, String>>() {
 
         @Override
@@ -223,10 +217,7 @@ public class Receiver {
     };
 
     public static void main(String[] args) throws Exception {
-        Scanner myObj = new Scanner(System.in); // Create a Scanner object
 
-        String[] input = myObj.nextLine().split(" ");
-        System.out.println(input);
-        Receiver receiver = new Receiver(Integer.parseInt(input[0]), input[1]);
+        Receiver receiver = new Receiver(Integer.parseInt(args[0]), args[1]);
     }
 }

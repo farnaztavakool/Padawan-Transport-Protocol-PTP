@@ -1,10 +1,7 @@
 import java.util.*;
 import java.io.*;
 import java.net.*;
-import java.util.Scanner;
 import java.util.concurrent.locks.*;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public class Sender extends Thread {
@@ -22,10 +19,7 @@ public class Sender extends Thread {
     private final float pdrop;
     private Timer current_timer;
     private final long start_timestamp;
-
     AtomicInteger startWindow = new AtomicInteger(0);
-    AtomicInteger end_flag = new AtomicInteger(0);
-
     private int nextSeqNumber;
     private Random random;
     private HashMap<Integer, String> buffer;
@@ -87,7 +81,6 @@ public class Sender extends Thread {
                         if (PTP.get_flag(packet_map).equals("FA")) {
                             dupACK += dupEnd;
                             disconnect(packet_map);
-                            System.out.println("closed");
                             terminate();
                         }
                         // Getting the final acks for the data
@@ -97,7 +90,6 @@ public class Sender extends Thread {
                                 send_FIN();
                             }
                             dupEnd += 1;
-                            System.out.println("send FIN");
 
                             continue;
                         }
@@ -110,6 +102,7 @@ public class Sender extends Thread {
 
                             current_timer.schedule(createTimerTask(), timeout);
                         } else if (ACK_number == startWindow.get() + 1) {
+
                             dupACK_overall += 1;
                             dupACK += 1;
                             // fast retransmit and resett dupACK
@@ -172,8 +165,8 @@ public class Sender extends Thread {
     }
 
     public void log(String srd, String type, Integer seq, Integer size, Integer ACK) throws Exception {
-        long cons = 1000;
-        long time = (System.currentTimeMillis() - start_timestamp);
+
+        long time = System.currentTimeMillis() - start_timestamp;
         log_file.write(srd + " " + time + " " + type + " " + seq + " " + size + " " + ACK);
         log_file.newLine();
     }
@@ -204,9 +197,6 @@ public class Sender extends Thread {
         };
     }
 
-    // I think we only need to manually start the timer for the first read
-    // either the timer will timeout and start again or a new file is acked and the
-    // timer will start for the new base
     public Thread send_file_thread() throws Exception {
         return new Thread() {
             public void run() {
@@ -214,7 +204,6 @@ public class Sender extends Thread {
                     // current seqNumbsyncLock.lock();er
 
                     while (nextSeqNumber < fileLength) {
-                        System.out.println(nextSeqNumber);
 
                         int i = nextSeqNumber;
                         while (i < Math.min(MWS + startWindow.get(), fileLength)) {
@@ -224,19 +213,18 @@ public class Sender extends Thread {
                                 byte[] data = new byte[size_to_read];
                                 if (file.read(data, 0, size_to_read) != 0) {
                                     // reading the data into buffer if needs to be retransmitted
-
                                     buffer.put(i, new String(data));
                                     if (nextSeqNumber == 0) {
                                         TimerTask task = createTimerTask();
                                         current_timer.schedule(task, timeout);
                                     }
+                                    // PL module
                                     if (!PL()) {
                                         num_segments += 1;
                                         send(PTP_send.send_data(data));
                                     } else {
                                         dropped_packet += 1;
                                         PTP_send.drop(data);
-                                        // System.out.println("dropped " + i);
                                     }
                                     i += Math.min(fileLength - i, MSS);
                                     nextSeqNumber = i;
@@ -257,11 +245,7 @@ public class Sender extends Thread {
                     terminate();
 
                 }
-                // try {
-                // Thread.currentThread().join();
-                // } catch (Exception e) {
-                // System.out.println(e);
-                // }
+
             }
 
             public void terminate() {
@@ -280,7 +264,6 @@ public class Sender extends Thread {
 
     public void connect() throws Exception {
         while (true) {
-            System.out.println("Sending SYN");
             byte[] sendData = PTP_send.send_SYN();
             send(sendData);
 
@@ -290,11 +273,9 @@ public class Sender extends Thread {
             String result = PTP.get_flag(packet_recieved);
             if (PTP.get_flag(packet_recieved).equals("SA")) {
 
-                System.out.println("receieved SYN/ACK sending ACK");
                 sendData = PTP_send.send_ACK(false, false, packet_recieved);
                 send(sendData);
                 log("snd", "A", PTP_send.seq_number, 0, PTP_send.last_ACK);
-                System.out.println("successfully connected");
                 return;
 
             }
@@ -320,7 +301,6 @@ public class Sender extends Thread {
         log("Number of Retransmitted Segments " + retransmitted_segment);
         log("Number of Duplicate Acknowledgements received " + dupACK_overall);
         log_file.close();
-        // end_flag.set(1);
 
     }
 
@@ -335,14 +315,11 @@ public class Sender extends Thread {
     }
 
     public static void main(String[] args) throws Exception {
-        Scanner myObj = new Scanner(System.in); // Create a Scanner object
 
-        String[] input = myObj.nextLine().split(" ");
-        Sender sender = new Sender(input[0], Integer.parseInt(input[1]), input[2], Integer.parseInt(input[3]),
-                Integer.parseInt(input[4]), Integer.parseInt(input[5]), Float.parseFloat(input[6]),
-                Integer.parseInt(input[7]));
+        Sender sender = new Sender(args[0], Integer.parseInt(args[1]), args[2], Integer.parseInt(args[3]),
+                Integer.parseInt(args[4]), Integer.parseInt(args[5]), Float.parseFloat(args[6]),
+                Integer.parseInt(args[7]));
         return;
-        // sender.stop();
     }
 
 }

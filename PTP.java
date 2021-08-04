@@ -3,10 +3,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.*;
 
 public class PTP {
-    /**
-     * source port, source IP FIN, SYN, ACK, D seq number ACK - - --- - - Data:
-     * ------
-     */
+
     private String IP;
     private Integer port;
     public Integer last_ACK;
@@ -64,10 +61,8 @@ public class PTP {
         String res = IP + " " + port.toString() + " " + "1111" + " " + seq_number.toString() + " " + last_ACK.toString()
                 + " " + "Data " + data + "/";
         return res.getBytes();
-
     }
 
-    // we dont need to set ACK for SYN
     public byte[] send_SYN() {
 
         seq_number += 1;
@@ -80,8 +75,8 @@ public class PTP {
         return send_PTP_packet("", "1000", 0);
 
     }
-    // public void set_data(string data)
 
+    // Adding header to send the packet
     public byte[] send_PTP_packet(String data, String flag, Integer ACK) {
 
         String res = IP + " " + port.toString() + " " + flag + " " + this.seq_number.toString() + " " + ACK.toString()
