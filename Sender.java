@@ -35,11 +35,14 @@ public class Sender extends Thread {
     public int retransmitted_segment;
     public int dropped_packet;
     public int num_segments;
+    public int dupEnd;
+    public volatile boolean stop_recv = false;
+    public volatile boolean stop_send = false;
     private static long fileLength;
 
     public Sender(String receiver_IP, int receiver_port, String path, int MWS, int MSS, int timeout, float pdrop,
             int seed) throws Exception {
-        nextSeqNumber = dupACK = dupACK_overall = retransmitted_segment = num_segments = 0;
+        nextSeqNumber = dupACK = dupACK_overall = retransmitted_segment = num_segments = dupEnd = 0;
         buffer = new HashMap<Integer, String>();
         random = new Random(seed);
         file = new FileInputStream(path);
@@ -58,12 +61,10 @@ public class Sender extends Thread {
         this.PTP_send = new PTP(port, IP.toString());
         start_timestamp = System.currentTimeMillis();
         connect();
-        Thread send = send_file_thread();
-        Thread end = receive_thread();
-        ExecutorService exec = Executors.newCachedThreadPool();
-        exec.execute(send);
-        exec.execute(end);
-        exec.shutdown();
+        send_file_thread().start();
+        receive_thread().start();
+
+        System.out.println("out of the threads");
 
     }
 
@@ -78,38 +79,36 @@ public class Sender extends Thread {
             public void run() {
                 HashMap<String, String> packet_map;
                 // receiving the ACK packages
-                while (true) {
-                    // if (end_flag.get() == 1)
-                    // return;
+                while (!stop_recv) {
 
                     try {
                         packet_map = receive();
                         int ACK_number = Integer.parseInt(packet_map.get("ACK_number"));
-                        syncLock.lock();
-                        // Last Acked expected
-                        System.out.println(packet_map);
+
+                        // receving FA ack to close the connection
                         if (PTP.get_flag(packet_map).equals("FA")) {
-                            dupACK -= 1;
+                            dupACK += dupEnd;
                             disconnect(packet_map);
-                            return;
+                            System.out.println("closed");
+                            terminate();
                         }
+                        // Getting the final acks for the data
                         if (ACK_number >= fileLength) {
-
-                            dupACK_overall += 1;
-                            current_timer.cancel();
-                            send_FIN();
+                            if (dupEnd == 0) {
+                                current_timer.cancel();
+                                send_FIN();
+                            }
+                            dupEnd += 1;
                             System.out.println("send FIN");
-                        }
 
+                            continue;
+                        }
+                        // receiving the expected ack
                         if (ACK_number > startWindow.get() + 1) {
                             // move the base to the current acked location
                             buffer.remove(startWindow.get());
                             startWindow.set(ACK_number - 1);
                             dupACK = 0;
-
-                            // reschedule the timer again
-                            System.out.println(
-                                    "Received Ack for this now cacnelling timer " + ACK_number + " " + startWindow);
 
                             current_timer.schedule(createTimerTask(), timeout);
                         } else if (ACK_number == startWindow.get() + 1) {
@@ -122,19 +121,21 @@ public class Sender extends Thread {
                                 send(getRetransmitPacket());
 
                                 // reschedule the timer again
-                                System.out.println("out of order now cacnelling timer and retransmitting" + ACK_number
-                                        + " " + startWindow);
                                 current_timer.schedule(createTimerTask(), timeout);
                                 dupACK = 0;
                             }
 
                         }
-                        syncLock.unlock();
                     } catch (Exception e) {
                         System.out.println(e);
                     }
 
                 }
+                return;
+            }
+
+            public void terminate() {
+                stop_recv = true;
             }
 
         };
@@ -211,10 +212,10 @@ public class Sender extends Thread {
     public Thread send_file_thread() throws Exception {
         return new Thread() {
             public void run() {
-                while (nextSeqNumber <= fileLength) {
+                while (!stop_send) {
                     // current seqNumbsyncLock.lock();er
 
-                    if (nextSeqNumber < MWS + startWindow.get()) {
+                    while (nextSeqNumber < fileLength) {
 
                         int i = nextSeqNumber;
                         while (i < Math.min(MWS + startWindow.get(), fileLength)) {
@@ -252,14 +253,20 @@ public class Sender extends Thread {
                             }
 
                         }
+
                     }
+                    terminate();
 
                 }
-                try {
-                    Thread.currentThread().join();
-                } catch (Exception e) {
-                    System.out.println(e);
-                }
+                // try {
+                // Thread.currentThread().join();
+                // } catch (Exception e) {
+                // System.out.println(e);
+                // }
+            }
+
+            public void terminate() {
+                stop_send = true;
             }
         };
 
@@ -279,7 +286,6 @@ public class Sender extends Thread {
             send(sendData);
 
             log("snd", "S", PTP_send.seq_number, 0, PTP_send.last_ACK);
-            System.out.println("logges");
             HashMap<String, String> packet_recieved = receive();
 
             String result = PTP.get_flag(packet_recieved);
