@@ -43,7 +43,7 @@ public class Sender extends Thread {
         getLengthOfFile(path);
         create_log();
         this.IP = InetAddress.getByName("localhost");
-        this.port = 3010;
+        this.port = 8000;
         this.receiver_IP = InetAddress.getByName(receiver_IP);
         this.receiver_port = receiver_port;
         this.MWS = MWS;
@@ -220,16 +220,18 @@ public class Sender extends Thread {
                                     }
                                     // PL module
                                     if (!PL()) {
+                                        log("snd", "D", PTP_send.seq_number, MSS, PTP_send.last_ACK);
+
                                         num_segments += 1;
                                         send(PTP_send.send_data(data));
+
                                     } else {
+                                        log("drop", "D", PTP_send.seq_number, MSS, PTP_send.last_ACK);
                                         dropped_packet += 1;
                                         PTP_send.drop(data);
                                     }
                                     i += Math.min(fileLength - i, MSS);
                                     nextSeqNumber = i;
-
-                                    log("snd", "D", PTP_send.seq_number, MSS, PTP_send.last_ACK);
 
                                 } else {
                                     return;
@@ -301,6 +303,7 @@ public class Sender extends Thread {
         log("Number of Retransmitted Segments " + retransmitted_segment);
         log("Number of Duplicate Acknowledgements received " + dupACK_overall);
         log_file.close();
+        file.close();
 
     }
 
